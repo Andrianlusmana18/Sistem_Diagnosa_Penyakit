@@ -94,51 +94,85 @@ export const allSymptoms = [
   { id: 'pusing', label: 'Pusing' },
 ];
 
-// Naive Bayes calculation
+// Constants for Laplace smoothing and numerical stability
+const ALPHA = 1.0; // Laplace smoothing parameter
+const EPSILON = 1e-10; // Small constant for numerical stability
+
+// Helper function to calculate P(Symptom|Disease) with Laplace smoothing
+function calculateSymptomProbability(symptom: string, disease: Disease): number {
+  return disease.symptoms.includes(symptom) ? 
+    (1 + ALPHA) / (disease.symptoms.length + 2 * ALPHA) : 
+    ALPHA / (disease.symptoms.length + 2 * ALPHA);
+}
+
+// Helper function to calculate log probability to avoid numerical underflow
+function calculateLogProbability(selectedSymptoms: string[], disease: Disease): number {
+  // Start with log of prior probability P(Disease)
+  let logProb = Math.log(disease.probability + EPSILON);
+
+  // Add log probabilities for each symptom
+  for (const symptom of allSymptoms.map(s => s.id)) {
+    const isSymptomPresent = selectedSymptoms.includes(symptom);
+    const pSymptomGivenDisease = calculateSymptomProbability(symptom, disease);
+
+    if (isSymptomPresent) {
+      logProb += Math.log(pSymptomGivenDisease + EPSILON);
+    } else {
+      logProb += Math.log(1 - pSymptomGivenDisease + EPSILON);
+    }
+  }
+
+  return logProb;
+}
+
+// Main Naive Bayes calculation function
 export function calculateNaiveBayes(selectedSymptoms: string[]): DiagnosisResult[] {
   if (selectedSymptoms.length === 0) {
     return [];
   }
 
   const results: DiagnosisResult[] = [];
+  const logProbabilities: number[] = [];
 
+  // Calculate log probabilities for each disease
   for (const disease of diseases) {
-    // Calculate P(Disease|Symptoms) using Naive Bayes
-    // P(D|S) = P(S|D) * P(D) / P(S)
+    const logProb = calculateLogProbability(selectedSymptoms, disease);
+    logProbabilities.push(logProb);
     
-    // Count matching symptoms
-    const matchingSymptoms = selectedSymptoms.filter(symptom => 
-      disease.symptoms.includes(symptom)
-    ).length;
-
-    // Calculate likelihood P(S|D)
-    const likelihood = matchingSymptoms / disease.symptoms.length;
+    // Convert log probability to regular probability
+    const probability = Math.exp(logProb);
     
-    // Prior probability P(D)
-    const prior = disease.probability;
-    
-    // Calculate posterior (simplified, without normalization)
-    const posterior = likelihood * prior * (matchingSymptoms / selectedSymptoms.length);
-
-    if (matchingSymptoms > 0) {
-      results.push({
-        disease,
-        probability: posterior,
-        confidence: posterior > 0.08 ? 'high' : posterior > 0.04 ? 'medium' : 'low',
-      });
-    }
-  }
-
-  // Sort by probability (descending)
-  results.sort((a, b) => b.probability - a.probability);
-
-  // Normalize probabilities to sum to 1
-  const totalProbability = results.reduce((sum, r) => sum + r.probability, 0);
-  if (totalProbability > 0) {
-    results.forEach(result => {
-      result.probability = (result.probability / totalProbability) * 100;
+    results.push({
+      disease,
+      probability,
+      confidence: 'medium' // Will be updated after normalization
     });
   }
 
-  return results.slice(0, 5); // Return top 5 results
+  // Calculate evidence P(Symptoms) using log-sum-exp trick for numerical stability
+  const maxLogProb = Math.max(...logProbabilities);
+  const evidence = maxLogProb + Math.log(
+    logProbabilities.map(lp => Math.exp(lp - maxLogProb)).reduce((a, b) => a + b, 0)
+  );
+
+  // Normalize probabilities and set confidence levels
+  results.forEach((result, i) => {
+    // Calculate posterior probability using Bayes' theorem
+    const normalizedProb = Math.exp(logProbabilities[i] - evidence) * 100;
+    result.probability = normalizedProb;
+
+    // Update confidence levels based on normalized probability
+    if (normalizedProb > 40) {
+      result.confidence = 'high';
+    } else if (normalizedProb > 20) {
+      result.confidence = 'medium';
+    } else {
+      result.confidence = 'low';
+    }
+  });
+
+  // Sort by probability (descending) and return top 5 results
+  return results
+    .sort((a, b) => b.probability - a.probability)
+    .slice(0, 5);
 }
